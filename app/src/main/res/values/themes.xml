@@ -1,0 +1,8 @@
+<resources>
+    <color name="space">#FF03020A</color>
+    <style name="Theme.NeonOrbits" parent="@android:style/Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@color/space</item>
+        <item name="android:statusBarColor">@color/space</item>
+        <item name="android:navigationBarColor">@color/space</item>
+    </style>
+</resources>
