@@ -83,11 +83,30 @@ class OrbitView(context: Context) : View(context) {
         style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; xfermode = addMode
     }
     private val gFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = addMode }
-    private val saturate = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(1.4f) })
-    private val glowBlitFallback = Paint(Paint.FILTER_BITMAP_FLAG).apply { alpha = 230; colorFilter = saturate }
+    private val glowBlitFallback = Paint(Paint.FILTER_BITMAP_FLAG).apply { alpha = 230 }
     private val glowBlitPlain = Paint(Paint.FILTER_BITMAP_FLAG)
     private val blurLayer: Any? =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) BlurredLayer(22f * dp, saturate) else null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) BlurredLayer() else null
+
+    /** Neon intensity, 0 (bare dots) .. 1 (original look) .. 2 (overdriven). */
+    var neon = 1.0
+        set(v) { field = v.coerceIn(0.0, 2.0); applyNeon() }
+
+    /** Called on tap before scattering; return true to swallow the tap. */
+    var onTap: (() -> Boolean)? = null
+
+    private fun applyNeon() {
+        val sat = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation((1 + 0.4 * neon).toFloat()) })
+        glowBlitFallback.colorFilter = sat
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (blurLayer as? BlurredLayer)?.configure((22.0 * dp * (0.6 + 0.4 * neon)).toFloat(), sat)
+        }
+    }
+
+    // Derived gains: glow/bridges scale fully, trails and halo size scale partially.
+    private val glowGain get() = neon
+    private val trailGain get() = 0.4 + 0.6 * neon
+    private val haloScale get() = 0.5 + 0.5 * neon
 
     // ---- Main layer ----------------------------------------------------------
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -103,7 +122,7 @@ class OrbitView(context: Context) : View(context) {
         letterSpacing = 0.02f
     }
 
-    init { isClickable = true }
+    init { isClickable = true; applyNeon() }
 
     fun resume() { running = true; lastNs = 0L; postInvalidateOnAnimation() }
     fun pause() { running = false }
@@ -201,25 +220,25 @@ class OrbitView(context: Context) : View(context) {
             for (i in 1 until n) {
                 if (i <= n * 0.5) continue
                 val t = i.toDouble() / n; val t2 = t * t
-                gLine.color = argb(0.35 * t2, b.tint)
-                gLine.strokeWidth = ((8 + 10 * t2) * dp).toFloat()
+                gLine.color = argb(0.35 * t2 * glowGain, b.tint)
+                gLine.strokeWidth = ((8 + 10 * t2) * dp * haloScale).toFloat()
                 gc.drawLine(sx(tr.x(s0 + i - 1)), sy(tr.y(s0 + i - 1)), sx(tr.x(s0 + i)), sy(tr.y(s0 + i)), gLine)
             }
             val x = sx(b.x); val y = sy(b.y)
             val r = (bodyRadius(b) * 2.2).toFloat()
             gFill.shader = RadialGradient(
-                x, y, r, argb(0.6 + b.flare * 0.4, b.tint), argb(0.0, b.tint), Shader.TileMode.CLAMP,
+                x, y, r, argb((0.6 + b.flare * 0.4) * glowGain, b.tint), argb(0.0, b.tint), Shader.TileMode.CLAMP,
             )
             gc.drawCircle(x, y, r, gFill)
             gFill.shader = null
         }
         for (p in sim.particles) {
-            gFill.color = argb(p.life * 0.5, p.tint)
+            gFill.color = argb(p.life * 0.5 * glowGain, p.tint)
             gc.drawCircle(sx(p.x), sy(p.y), 6f * dp, gFill)
         }
         for (rg in sim.rings) {
             if (rg.r <= 0) continue
-            gLine.color = argb(rg.life * 0.6, 255, 200, 160)
+            gLine.color = argb(rg.life * 0.6 * glowGain, 255, 200, 160)
             gLine.strokeWidth = 18f * dp
             gc.drawCircle(sx(rg.x), sy(rg.y), (rg.r * scale).toFloat(), gLine)
         }
@@ -242,7 +261,8 @@ class OrbitView(context: Context) : View(context) {
             if (k < 0) continue
             val x0 = sx(a.x); val y0 = sy(a.y); val x1 = sx(b.x); val y1 = sy(b.y)
             if (hypot(x1 - x0, y1 - y0) < 0.5f) continue
-            line.shader = LinearGradient(x0, y0, x1, y1, argb(0.5 * k, a.tint), argb(0.5 * k, b.tint), Shader.TileMode.CLAMP)
+            val ba = 0.5 * k * glowGain
+            line.shader = LinearGradient(x0, y0, x1, y1, argb(ba, a.tint), argb(ba, b.tint), Shader.TileMode.CLAMP)
             line.strokeWidth = ((1 + 3 * k) * dp).toFloat()
             c.drawLine(x0, y0, x1, y1, line)
             line.shader = null
@@ -255,8 +275,8 @@ class OrbitView(context: Context) : View(context) {
             // Colour ribbon, thickening and brightening toward the head.
             for (i in 1 until n) {
                 val t = i.toDouble() / n; val t2 = t * t
-                line.color = argb(0.7 * t2, b.tint)
-                line.strokeWidth = ((1 + 6 * t2) * dp).toFloat()
+                line.color = argb(0.7 * t2 * trailGain, b.tint)
+                line.strokeWidth = ((1 + 6 * t2 * haloScale) * dp).toFloat()
                 c.drawLine(sx(tr.x(s0 + i - 1)), sy(tr.y(s0 + i - 1)), sx(tr.x(s0 + i)), sy(tr.y(s0 + i)), line)
             }
             // White-hot filament along the newest third.
@@ -274,7 +294,7 @@ class OrbitView(context: Context) : View(context) {
             val r = bodyRadius(b).toFloat()
             fill.shader = RadialGradient(
                 x, y, r,
-                intArrayOf(argb(0.95, b.tint), argb(0.4, b.tint), argb(0.0, b.tint)),
+                intArrayOf(argb(0.95 * glowGain, b.tint), argb(0.4 * glowGain, b.tint), argb(0.0, b.tint)),
                 floatArrayOf(0f, 0.2f, 1f), Shader.TileMode.CLAMP,
             )
             c.drawCircle(x, y, r, fill)
@@ -306,7 +326,7 @@ class OrbitView(context: Context) : View(context) {
 
     private fun bodyRadius(b: Body): Double {
         val speed = hypot(b.vx, b.vy)
-        return ((if (b.intruder) 34.0 else 22.0) + speed * 8 + b.flare * 30) * dp
+        return ((if (b.intruder) 34.0 else 22.0) + speed * 8 + b.flare * 30) * dp * haloScale
     }
 
     // ---- Input ---------------------------------------------------------------
@@ -314,7 +334,7 @@ class OrbitView(context: Context) : View(context) {
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-            sim.scatter()
+            if (onTap?.invoke() != true) sim.scatter()
             performClick()
         }
         return true
@@ -348,15 +368,16 @@ class OrbitView(context: Context) : View(context) {
 
 /** Android 12+: GPU Gaussian blur + saturation over the glow bitmap (the CSS blur(14px) saturate(1.4)). */
 @TargetApi(Build.VERSION_CODES.S)
-private class BlurredLayer(radiusPx: Float, filter: ColorFilter) {
-    private val node = RenderNode("glow").apply {
-        setRenderEffect(
+private class BlurredLayer {
+    private val node = RenderNode("glow").apply { setAlpha(0.9f) }
+
+    fun configure(radiusPx: Float, filter: ColorFilter) {
+        node.setRenderEffect(
             RenderEffect.createChainEffect(
                 RenderEffect.createColorFilterEffect(filter),
                 RenderEffect.createBlurEffect(radiusPx, radiusPx, Shader.TileMode.DECAL),
             )
         )
-        setAlpha(0.9f)
     }
 
     fun draw(canvas: Canvas, bmp: Bitmap, dst: Rect, paint: Paint) {
